@@ -44,14 +44,16 @@ const processArticle = async (article) => {
         {
           role: "user",
           content:
-            "You are the investor Warren Buffett. Review the following article abstract and rate a score between 0 and 100 on how relevant this article is to the stock market. I want the response to have the headline and a brief to the point summary with a score. as well as what Warren Buffett would do with this information as an investor which stocks would he buy or sell. But if the score is below 80, then don't give a response. Here is the article: " +
-            article.abstract,
+            "You are the investor Michael Burry. Review the following article headline and rate a score between 0 and 100 on how relevant this article is to the stock market. Also, as Michael Burry what would you do with this information as an investor which stocks would he buy or sell. But if the score is below 80, then don't give a response. Keep the response brief (2 or 3 sentances only).  Here is the headline: " +
+            article.title,
         },
       ],
     });
 
     const response = completion.choices[0].message.content;
     const scoreMatch = response.match(/(?:Score|Relevance Score):\s*(\d+)/i);
+
+    console.log(response);
 
     if (scoreMatch) {
       const score = parseInt(scoreMatch[1]);
@@ -79,7 +81,7 @@ app.get("/api/sections", async (req, res) => {
         "api-key": NYT_API_KEY,
       },
     });
-    res.json(response.data);
+    res.json(response.data.results.title);
   } catch (error) {
     console.error("Error fetching sections:", error.message);
     res.status(500).json({ error: "Failed to fetch sections" });
@@ -89,7 +91,7 @@ app.get("/api/sections", async (req, res) => {
 app.get("/api/articles/:section", async (req, res) => {
   try {
     const { section } = req.params;
-    const { limit = 10, offset = 0 } = req.query;
+    const { limit = 100, offset = 0 } = req.query;
 
     const response = await axios.get(`${NYT_BASE_URL}/all/${section}.json`, {
       params: {
@@ -102,11 +104,11 @@ app.get("/api/articles/:section", async (req, res) => {
     // Map over the results to select specific properties
     const selectedArticles = response.data.results.map((article) => ({
       title: article.title,
-      abstract: article.abstract,
+      // abstract: article.abstract,
       url: article.url,
       published_date: article.published_date,
-      section: article.section,
-      des_facet: article.des_facet,
+      // section: article.section,
+      // des_facet: article.des_facet,
     }));
 
     const relevantArticles = [];
