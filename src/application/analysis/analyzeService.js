@@ -1,5 +1,3 @@
-import { BUILT_IN_PROMPTS, findBuiltInPrompt } from "./prompts.js";
-
 export class AnalysisError extends Error {
   constructor(message, { status = 400 } = {}) {
     super(message);
@@ -24,16 +22,46 @@ const renderHeadlines = (headlines) =>
  * Runs one user-chosen analysis prompt across the aggregated headlines.
  *
  * A single model call sees the whole set, so the analysis can reason about
- * themes across articles rather than one headline at a time.
+ * themes across articles rather than one headline at a time. Each run is
+ * recorded, so results are browsable afterwards.
  */
 export const createAnalysisService = ({
   client,
   model,
   aggregateService,
-  listPrompts = () => BUILT_IN_PROMPTS,
-  getPrompt = findBuiltInPrompt,
+  promptsRepo,
+  analysesRepo,
 }) => ({
-  listPrompts,
+  listPrompts() {
+    return promptsRepo.list();
+  },
+
+  savePrompt({ label, promptText, description }) {
+    if (!label || !String(label).trim()) {
+      throw new AnalysisError("A prompt needs a label.");
+    }
+    if (!promptText || !String(promptText).trim()) {
+      throw new AnalysisError("A prompt needs promptText.");
+    }
+
+    return promptsRepo.create({
+      label: String(label).trim(),
+      promptText: String(promptText).trim(),
+      description: description ? String(description).trim() : "",
+    });
+  },
+
+  listAnalyses(options) {
+    return analysesRepo.list(options);
+  },
+
+  getAnalysis(id) {
+    const analysis = analysesRepo.get(id);
+    if (!analysis) {
+      throw new AnalysisError(`No analysis with id ${id}`, { status: 404 });
+    }
+    return analysis;
+  },
 
   resolvePrompt({ promptId, customPromptText }) {
     const hasId = Boolean(promptId);
@@ -46,14 +74,19 @@ export const createAnalysisService = ({
     }
 
     if (hasCustom) {
-      return { id: null, label: "Custom prompt", promptText: customPromptText.trim() };
+      return {
+        id: null,
+        label: "Custom prompt",
+        promptText: customPromptText.trim(),
+      };
     }
 
-    const preset = getPrompt(promptId);
-    if (!preset) {
+    // Resolves saved custom prompts by id too, not just built-ins.
+    const saved = promptsRepo.get(promptId);
+    if (!saved) {
       throw new AnalysisError(`Unknown promptId: ${promptId}`, { status: 404 });
     }
-    return preset;
+    return saved;
   },
 
   async run({ promptId, customPromptText, headlineFilter = {} }) {
@@ -79,11 +112,26 @@ export const createAnalysisService = ({
       ],
     });
 
-    return {
-      result: completion.choices[0].message.content,
-      promptUsed: { id: prompt.id, label: prompt.label, promptText: prompt.promptText },
-      headlineCount: headlines.length,
+    const saved = analysesRepo.save({
+      promptId: prompt.id,
+      promptLabel: prompt.label,
+      promptText: prompt.promptText,
       headlineFilter,
+      result: completion.choices[0].message.content,
+      headlineCount: headlines.length,
+    });
+
+    return {
+      id: saved.id,
+      result: saved.result,
+      promptUsed: {
+        id: prompt.id,
+        label: prompt.label,
+        promptText: prompt.promptText,
+      },
+      headlineCount: saved.headlineCount,
+      headlineFilter,
+      createdAt: saved.createdAt,
     };
   },
 });

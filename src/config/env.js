@@ -26,7 +26,8 @@ export const config = {
   /** How many articles to score concurrently, to stay under rate limits. */
   scoringConcurrency: int(process.env.SCORING_CONCURRENCY, 5),
 
-  cacheTtlSeconds: int(process.env.CACHE_TTL_SECONDS, 3600),
+  /** ":memory:" gives each process a private throwaway database. */
+  sqlitePath: process.env.SQLITE_PATH || "data/mr-picker.sqlite",
 };
 
 /** Fail fast at boot rather than at the first request. */

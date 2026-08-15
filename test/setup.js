@@ -5,6 +5,9 @@ import { beforeAll, afterEach, afterAll } from "vitest";
 // are replayed from cassettes and the OpenAI client is injected as a fake.
 process.env.NYT_API_KEY = "test-nyt-key";
 process.env.OPENAI_API_KEY = "test-openai-key";
+// Each createApp() opens its own private database, so tests never share state
+// and never touch the developer's real data/mr-picker.sqlite.
+process.env.SQLITE_PATH = ":memory:";
 
 beforeAll(() => {
   // Lockdown: any HTTP request that isn't explicitly mocked fails loudly

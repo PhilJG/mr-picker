@@ -27,7 +27,10 @@ src/
   data/
     sections.js              the NYT section list (no live endpoint publishes it)
     nytClient.js             fetchTopStories(section) -> normalized articles
-    articleStore.js          get/save/all/count over scored articles
+    db.js                    opens SQLite, creates schema, seeds built-in prompts
+    articlesRepo.js          get/save/all/count/findHeadlines over scored articles
+    promptsRepo.js           built-in + user-saved analysis prompts
+    analysesRepo.js          a record of every analysis run
 
   application/
     scoring/
@@ -90,9 +93,29 @@ analyzeRoute             { result, promptUsed, headlineCount, headlineFilter }
   already known. Storing everything is also what makes the aggregate view and
   re-analysis possible without re-fetching.
 - **Everything is injected through `createApp`.** Tests substitute a fake OpenAI
-  client and a pre-seeded store; no module mocking, no live network.
-- **`articleStore` is the swap seam.** Phase 2 replaces its body with SQLite
-  without touching the services above it.
+  client and a pre-seeded in-memory database; no module mocking, no live network.
+- **The repos are the swap seam.** Services depend on `get/save/findHeadlines`,
+  not on SQL. Moving to Postgres later means rewriting `data/*Repo.js` and
+  nothing above it.
+- **No cache in front of SQLite.** better-sqlite3 is synchronous and local, so
+  reads are microseconds; a cache would add a second source of truth to keep in
+  sync, and a second store implementation free to drift from the real one.
+- **`prompt_text_snapshot`** records the prompt text that actually ran, so
+  editing a saved prompt later doesn't rewrite the history of past analyses.
+- **Built-in prompts are code-owned.** They're upserted on every boot, but the
+  upsert is guarded by `is_builtin = 1`, so user prompts are never touched.
+
+## Data
+
+SQLite via better-sqlite3, at `SQLITE_PATH` (default `data/mr-picker.sqlite`).
+Schema is created idempotently on boot — no migration framework until there's
+an actual second migration to run.
+
+| Table | Holds |
+| --- | --- |
+| `articles` | one row per URL: the article, its score, rationale, and which model scored it |
+| `analysis_prompts` | built-in personas (seeded from code) and user-saved prompts |
+| `analyses` | every run: prompt snapshot, filter, result, headline count |
 
 ## Testing
 
@@ -103,8 +126,6 @@ scoring calls (tools present → replies with a tool call) from analysis calls
 
 ## Known gaps
 
-- Storage is in-memory, so everything is lost on restart (Phase 2: SQLite).
-- Custom prompts are accepted but not saved (Phase 2).
-- Analysis results are returned but not recorded (Phase 2).
 - No UI (Phase 3).
+- Articles accumulate forever; `since` filters the pool but nothing prunes it.
 - Industry classification and stock selection from the roadmap are unbuilt.

@@ -5,8 +5,13 @@ export const createHeadlinesRoute = ({ aggregateService }) => {
 
   /** Every scored headline gathered so far, across all fetched sections. */
   router.get("/api/headlines", (req, res) => {
-    const { minScore, section, limit } = req.query;
-    const results = aggregateService.getHeadlines({ minScore, section, limit });
+    const { minScore, section, since, limit } = req.query;
+    const results = aggregateService.getHeadlines({
+      minScore,
+      section,
+      since,
+      limit,
+    });
 
     res.json({ num_results: results.length, results });
   });

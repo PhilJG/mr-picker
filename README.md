@@ -15,8 +15,11 @@ PORT=3000                # optional, default 3000
 OPENAI_MODEL=gpt-4o-mini # optional, default gpt-4o-mini
 RELEVANCE_THRESHOLD=80   # optional, default 80 — the one place the cutoff lives
 SCORING_CONCURRENCY=5    # optional, default 5 — parallel scoring calls
-CACHE_TTL_SECONDS=3600   # optional, default 3600
+SQLITE_PATH=data/mr-picker.sqlite   # optional; ":memory:" for a throwaway db
 ```
+
+The SQLite file is created on first boot, along with its schema and the
+built-in prompts. Delete it to start clean.
 
 ```bash
 npm install
@@ -46,9 +49,12 @@ npm run record-fixtures technology business
 | --- | --- |
 | `GET /api/sections` | The NYT section names you can fetch |
 | `GET /api/articles/:section` | Fetch a section, score each article, return those over the threshold. Query: `limit`, `offset`, `minScore` |
-| `GET /api/headlines` | Every scored headline gathered so far, across sections. Query: `minScore`, `section`, `limit` |
-| `GET /api/prompts` | Built-in analyst personas |
-| `POST /api/analyze` | Run a persona (`promptId`) or your own `customPromptText` over the headlines. Optional `headlineFilter` |
+| `GET /api/headlines` | Every scored headline gathered so far, across sections. Query: `minScore`, `section`, `since`, `limit` |
+| `GET /api/prompts` | Analyst personas — built-in plus your saved ones |
+| `POST /api/prompts` | Save a custom prompt: `{label, promptText, description?}` |
+| `POST /api/analyze` | Run a persona (`promptId`) or a one-off `customPromptText` over the headlines. Optional `headlineFilter` |
+| `GET /api/analyses` | Past runs, newest first. Query: `limit` |
+| `GET /api/analyses/:id` | One past run, including the prompt text used |
 
 ```bash
 curl http://localhost:3000/api/sections
@@ -84,9 +90,10 @@ Built:
 - [x] Gather scored headlines into one cross-section pool
 - [x] Choose a built-in analyst persona or write your own, and run it
 
+- [x] Persist articles, custom prompts, and past analyses to SQLite
+
 Next:
 
-- [ ] Persist articles, custom prompts, and past analyses to SQLite
 - [ ] React + Vite UI over the API
 - [ ] Classify which industries an article is relevant to
 - [ ] Select stocks based on industry and relevance; look for correlated names

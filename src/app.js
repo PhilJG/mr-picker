@@ -2,8 +2,11 @@ import express from "express";
 import { rateLimit } from "express-rate-limit";
 
 import { config } from "./config/env.js";
+import { openDatabase } from "./data/db.js";
 import { createNytClient } from "./data/nytClient.js";
-import { createArticleStore } from "./data/articleStore.js";
+import { createArticlesRepo } from "./data/articlesRepo.js";
+import { createPromptsRepo } from "./data/promptsRepo.js";
+import { createAnalysesRepo } from "./data/analysesRepo.js";
 import { createOpenAiClient } from "./application/scoring/openaiClient.js";
 import { createScorer } from "./application/scoring/scoreArticle.js";
 import { createArticleService } from "./application/articles/articleService.js";
@@ -14,33 +17,35 @@ import { createArticlesRoute } from "./routes/articlesRoute.js";
 import { createHeadlinesRoute } from "./routes/headlinesRoute.js";
 import { createPromptsRoute } from "./routes/promptsRoute.js";
 import { createAnalyzeRoute } from "./routes/analyzeRoute.js";
+import { createAnalysesRoute } from "./routes/analysesRoute.js";
 
 /**
  * Composition root: every dependency is built here and passed down, so tests
- * can substitute fakes and Phase 2 can swap the store for SQLite by changing
- * one line.
+ * can substitute a fake model client and an in-memory database.
  */
 export const createApp = ({
   openaiClient,
-  store,
   nytClient,
+  db = openDatabase({ path: config.sqlitePath }),
   nytApiKey = config.nytApiKey,
   openaiApiKey = config.openaiApiKey,
   model = config.openaiModel,
   threshold = config.relevanceThreshold,
   concurrency = config.scoringConcurrency,
-  cacheTtlSeconds = config.cacheTtlSeconds,
   logger = console,
 } = {}) => {
   const app = express();
 
   const client = openaiClient ?? createOpenAiClient(openaiApiKey);
-  const articleStore = store ?? createArticleStore({ ttlSeconds: cacheTtlSeconds });
   const nyt = nytClient ?? createNytClient({ apiKey: nytApiKey });
+
+  const articlesRepo = createArticlesRepo(db);
+  const promptsRepo = createPromptsRepo(db);
+  const analysesRepo = createAnalysesRepo(db);
 
   const articleService = createArticleService({
     nytClient: nyt,
-    store: articleStore,
+    store: articlesRepo,
     scorer: createScorer({ client, model }),
     threshold,
     concurrency,
@@ -48,7 +53,7 @@ export const createApp = ({
   });
 
   const aggregateService = createAggregateService({
-    store: articleStore,
+    store: articlesRepo,
     threshold,
   });
 
@@ -56,6 +61,8 @@ export const createApp = ({
     client,
     model,
     aggregateService,
+    promptsRepo,
+    analysesRepo,
   });
 
   app.use(express.json());
@@ -69,8 +76,12 @@ export const createApp = ({
   app.use(createSectionsRoute());
   app.use(createArticlesRoute({ articleService, logger }));
   app.use(createHeadlinesRoute({ aggregateService }));
-  app.use(createPromptsRoute({ analysisService }));
+  app.use(createPromptsRoute({ analysisService, logger }));
   app.use(createAnalyzeRoute({ analysisService, logger }));
+  app.use(createAnalysesRoute({ analysisService, logger }));
+
+  // Exposed for tests and for a future graceful shutdown.
+  app.locals.db = db;
 
   return app;
 };
