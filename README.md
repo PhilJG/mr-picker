@@ -27,11 +27,27 @@ npm start      # node src/server.js
 npm run dev    # nodemon src/server.js — restarts on file changes
 ```
 
+### The UI
+
+The React app lives in `ui/` and talks to the API above. Run both, in two
+terminals:
+
+```bash
+npm run dev            # API on :3000
+cd ui && npm install && npm run dev   # UI on :5173
+```
+
+Then open http://localhost:5173. The UI fetches same-origin `/api/...` paths,
+which Vite proxies to the API — no CORS involved. If your API is on another
+port, point the proxy at it: `API_TARGET=http://localhost:3010 npm run dev`.
+
 ## Testing
 
 ```bash
-npm test        # vitest, single run
+npm test              # server: vitest, single run
 npm run test:watch
+
+cd ui && npm test     # UI: jsdom render tests
 ```
 
 Tests never touch the network. NYT responses are replayed from cassettes in
@@ -73,9 +89,10 @@ Three layers, described in `docs/codebase-overview.md`:
 ```
 src/
   config/       env + the single relevance threshold
-  data/         NYT client, article store, section list
+  data/         NYT client, SQLite repos, section list
   application/  scoring, aggregation, analysis
   routes/       thin HTTP handlers
+ui/             React + Vite front end
 ```
 
 Scoring uses OpenAI tool calling, so a score arrives as typed JSON rather than
@@ -91,10 +108,10 @@ Built:
 - [x] Choose a built-in analyst persona or write your own, and run it
 
 - [x] Persist articles, custom prompts, and past analyses to SQLite
+- [x] React + Vite UI over the API
 
 Next:
 
-- [ ] React + Vite UI over the API
 - [ ] Classify which industries an article is relevant to
 - [ ] Select stocks based on industry and relevance; look for correlated names
 - [ ] Paper-trade on that information

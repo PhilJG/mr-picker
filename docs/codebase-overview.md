@@ -45,7 +45,29 @@ src/
 
   routes/                    thin HTTP handlers, one file per endpoint
   util/concurrency.js        bounded parallelism for scoring calls
+
+ui/                          React + Vite SPA, its own package
+  src/api.js                 relative-path fetch wrapper
+  src/hooks.js               useResource: fetch on mount + manual reload
+  src/App.jsx                holds shared state (minScore, selected prompt)
+  src/components/            SectionFetcher, HeadlineFeed, PromptPicker,
+                             AnalysisRunner, AnalysisHistory
 ```
+
+## UI
+
+Four steps down the page, matching the flow: gather headlines (fetch and score
+a section) -> review the pool -> pick an analyst -> run it, with history below.
+
+- **Vite proxy, not CORS.** `/api` is proxied to the API in dev, so the UI uses
+  same-origin relative paths that behave identically if Express ever serves the
+  built bundle. `API_TARGET` overrides the target port.
+- **Plain fetch + a small `useResource` hook, not react-query.** No background
+  refetch, cross-tab invalidation, or optimistic updates are needed here.
+- **Fetching a section is an explicit button**, because it is the only action
+  that spends money on model calls.
+- Tests (`cd ui && npm test`) mount the real app under jsdom against a stubbed
+  `fetch`, so the request paths and bodies the UI sends are asserted too.
 
 ## Request flow
 
@@ -126,6 +148,6 @@ scoring calls (tools present → replies with a tool call) from analysis calls
 
 ## Known gaps
 
-- No UI (Phase 3).
 - Articles accumulate forever; `since` filters the pool but nothing prunes it.
+- Express does not serve the built UI bundle; the two run as separate processes.
 - Industry classification and stock selection from the roadmap are unbuilt.
