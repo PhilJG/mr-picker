@@ -21,7 +21,16 @@ const limiter = rateLimit({
 
 // NYT API configuration
 const NYT_API_KEY = process.env.NYT_API_KEY;
-const NYT_BASE_URL = "https://api.nytimes.com/svc/news/v3/content";
+const NYT_BASE_URL = "https://api.nytimes.com/svc/topstories/v2";
+
+// Top Stories API section names (no live endpoint exists to list these)
+const NYT_SECTIONS = [
+  "arts", "automobiles", "books/review", "business", "fashion", "food",
+  "health", "home", "insider", "magazine", "movies", "nyregion",
+  "obituaries", "opinion", "politics", "realestate", "science", "sports",
+  "sundayreview", "technology", "theater", "t-magazine", "travel",
+  "upshot", "us", "world",
+];
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
 // Middleware
@@ -75,17 +84,7 @@ const processArticle = async (article) => {
 
 // Routes
 app.get("/api/sections", async (req, res) => {
-  try {
-    const response = await axios.get(`${NYT_BASE_URL}/section-list.json`, {
-      params: {
-        "api-key": NYT_API_KEY,
-      },
-    });
-    res.json(response.data.results.title);
-  } catch (error) {
-    console.error("Error fetching sections:", error.message);
-    res.status(500).json({ error: "Failed to fetch sections" });
-  }
+  res.json(NYT_SECTIONS);
 });
 
 app.get("/api/articles/:section", async (req, res) => {
@@ -93,16 +92,16 @@ app.get("/api/articles/:section", async (req, res) => {
     const { section } = req.params;
     const { limit = 100, offset = 0 } = req.query;
 
-    const response = await axios.get(`${NYT_BASE_URL}/all/${section}.json`, {
+    const response = await axios.get(`${NYT_BASE_URL}/${section}.json`, {
       params: {
         "api-key": NYT_API_KEY,
-        limit,
-        offset,
       },
     });
 
     // Map over the results to select specific properties
-    const selectedArticles = response.data.results.map((article) => ({
+    const selectedArticles = response.data.results
+      .slice(Number(offset), Number(offset) + Number(limit))
+      .map((article) => ({
       title: article.title,
       // abstract: article.abstract,
       url: article.url,
