@@ -1,195 +1,214 @@
 /**
- * Characterization tests for GET /api/articles/:section.
+ * GET /api/articles/:section
  *
- * These lock in CURRENT behavior so the Phase 1 refactor can be verified as
- * behavior-preserving. Cases tagged KNOWN BUG capture behavior that is
- * deliberately wrong today and is scheduled to change in Phase 1 — when it
- * does, those assertions get rewritten, not deleted.
+ * Descended from the Phase 0 characterization tests. Cases that were tagged
+ * KNOWN BUG there are now asserted the other way round — they document the
+ * fixes rather than the defects.
  */
 import { describe, it, expect } from "vitest";
 import request from "supertest";
-import { createApp } from "../app.js";
+import { createApp } from "../src/app.js";
 import { createFakeOpenAI, scoreByHeadline } from "./helpers/fakeOpenAI.js";
 import { mockNytSection, mockNytFailure, loadNytFixture } from "./helpers/nyt.js";
 
 const fixture = loadNytFixture("technology");
 const [CHIP, CLOUD, SPEAKER] = fixture.results;
 
+// Always pin the threshold rather than inheriting a developer's local .env.
+const buildApp = (openaiClient, overrides = {}) =>
+  createApp({ openaiClient, threshold: 80, ...overrides });
+
 describe("GET /api/articles/:section", () => {
   it("returns every article whose score clears the threshold", async () => {
     mockNytSection("technology");
-    const openai = createFakeOpenAI("Score: 90 — highly market relevant.");
+    const openai = createFakeOpenAI({ scorer: { score: 90, rationale: "ok" } });
 
-    const res = await request(createApp({ openaiClient: openai })).get(
-      "/api/articles/technology"
-    );
+    const res = await request(buildApp(openai)).get("/api/articles/technology");
 
     expect(res.status).toBe(200);
     expect(res.body.status).toBe("OK");
     expect(res.body.num_results).toBe(3);
-    expect(res.body.results).toHaveLength(3);
-    expect(openai.callCount).toBe(3);
+    expect(openai.scoringCount).toBe(3);
   });
 
-  it("returns only title, url, published_date and analysis for each article", async () => {
+  it("returns a structured score and rationale per article", async () => {
     mockNytSection("technology");
-    const openai = createFakeOpenAI("Score: 90 — highly market relevant.");
+    const openai = createFakeOpenAI({
+      scorer: { score: 91, rationale: "Semis guidance cut." },
+    });
 
-    const res = await request(createApp({ openaiClient: openai })).get(
-      "/api/articles/technology"
-    );
+    const res = await request(buildApp(openai)).get("/api/articles/technology");
 
-    expect(res.body.results[0]).toEqual({
+    expect(res.body.results[0]).toMatchObject({
       title: CHIP.title,
       url: CHIP.url,
+      abstract: CHIP.abstract,
+      section: "technology",
       published_date: CHIP.published_date,
-      analysis: "Score: 90 — highly market relevant.",
+      score: 91,
+      rationale: "Semis guidance cut.",
     });
-    // KNOWN BUG: abstract is fetched from NYT then discarded before scoring,
-    // so the model only ever sees the headline. Phase 1 passes it through.
-    expect(res.body.results[0]).not.toHaveProperty("abstract");
+    // The old free-text `analysis` blob is gone in favour of typed fields.
+    expect(res.body.results[0]).not.toHaveProperty("analysis");
+    expect(res.body.results[0].scored_at).toEqual(expect.any(String));
   });
 
-  it("sends only the headline to the model, never the abstract", async () => {
+  it("FIXED: sends the abstract to the model, not just the headline", async () => {
     mockNytSection("technology");
-    const openai = createFakeOpenAI("Score: 90");
+    const openai = createFakeOpenAI();
 
-    await request(createApp({ openaiClient: openai })).get(
-      "/api/articles/technology"
-    );
+    await request(buildApp(openai)).get("/api/articles/technology");
 
-    const prompt = openai.calls[0].messages[0].content;
+    const prompt = openai.scoredPrompts.find((p) => p.includes(CHIP.title));
     expect(prompt).toContain(CHIP.title);
-    expect(prompt).not.toContain(CHIP.abstract);
+    expect(prompt).toContain(CHIP.abstract);
   });
 
-  it("drops articles that score below the threshold", async () => {
+  it("FIXED: uses one threshold, and the prompt carries no threshold at all", async () => {
+    // Previously the prompt said "below 80, don't respond" while the code
+    // filtered at >= 75. Now the model always scores and only the app filters.
     mockNytSection("technology");
-    const openai = createFakeOpenAI(
-      scoreByHeadline({
-        "Chip Maker": "Score: 95",
-        "Antitrust Inquiry": "Score: 88",
-        "Smart Speaker": "Score: 10",
-      })
-    );
+    const openai = createFakeOpenAI({
+      scorer: scoreByHeadline({
+        "Chip Maker": 80, // exactly at the threshold -> kept
+        "Antitrust Inquiry": 79, // one point under -> dropped
+        "Smart Speaker": 5,
+      }),
+    });
 
-    const res = await request(createApp({ openaiClient: openai })).get(
-      "/api/articles/technology"
-    );
-
-    const urls = res.body.results.map((a) => a.url);
-    expect(urls).toContain(CHIP.url);
-    expect(urls).toContain(CLOUD.url);
-    expect(urls).not.toContain(SPEAKER.url);
-    expect(res.body.num_results).toBe(2);
-  });
-
-  it("KNOWN BUG: filters at 75 in code although the prompt says 80", async () => {
-    // The prompt instructs the model not to respond below 80, but the code
-    // independently accepts >= 75 — two thresholds that disagree. Phase 1
-    // collapses this to a single configurable RELEVANCE_THRESHOLD.
-    mockNytSection("technology");
-    const openai = createFakeOpenAI(
-      scoreByHeadline({
-        "Chip Maker": "Score: 75", // below the prompt's 80, still accepted
-        "Antitrust Inquiry": "Score: 74", // one point lower, rejected
-        "Smart Speaker": "Score: 0",
-      })
-    );
-
-    const res = await request(createApp({ openaiClient: openai })).get(
-      "/api/articles/technology"
-    );
+    const res = await request(buildApp(openai)).get("/api/articles/technology");
 
     expect(res.body.results.map((a) => a.url)).toEqual([CHIP.url]);
 
-    const prompt = openai.calls[0].messages[0].content;
-    expect(prompt).toContain("if the score is below 80");
+    for (const prompt of openai.scoredPrompts) {
+      expect(prompt).not.toMatch(/\b(75|80)\b/);
+      expect(prompt.toLowerCase()).not.toContain("don't give a response");
+    }
   });
 
-  it("KNOWN BUG: silently drops articles when the score cannot be parsed", async () => {
-    // Score arrives as free text matched by regex. Any formatting the regex
-    // misses means the article vanishes with no error. Phase 1 replaces this
-    // with structured tool-calling output.
+  it("honours a per-request minScore override", async () => {
     mockNytSection("technology");
-    const openai = createFakeOpenAI("I'd rate this a strong 95 out of 100.");
+    const openai = createFakeOpenAI({
+      scorer: scoreByHeadline({
+        "Chip Maker": 90,
+        "Antitrust Inquiry": 60,
+        "Smart Speaker": 5,
+      }),
+    });
 
-    const res = await request(createApp({ openaiClient: openai })).get(
-      "/api/articles/technology"
+    const res = await request(buildApp(openai)).get(
+      "/api/articles/technology?minScore=50"
     );
 
-    expect(res.body.num_results).toBe(0);
-    expect(res.body.results).toEqual([]);
+    expect(res.body.results.map((a) => a.url)).toEqual([CHIP.url, CLOUD.url]);
   });
 
-  it("does not re-score an article it has already cached", async () => {
-    const openai = createFakeOpenAI("Score: 90");
-    const app = createApp({ openaiClient: openai });
+  it("FIXED: caches low scorers too, so they are never re-billed", async () => {
+    // The old code only cached articles that passed the threshold, so
+    // rejected ones went back to the model on every single request.
+    const openai = createFakeOpenAI({ scorer: { score: 10, rationale: "noise" } });
+    const app = buildApp(openai);
 
     mockNytSection("technology");
     await request(app).get("/api/articles/technology");
-    expect(openai.callCount).toBe(3);
+    expect(openai.scoringCount).toBe(3);
 
     mockNytSection("technology");
     const res = await request(app).get("/api/articles/technology");
 
-    expect(openai.callCount).toBe(3); // served from cache, no new model calls
-    expect(res.body.num_results).toBe(3);
+    expect(openai.scoringCount).toBe(3); // no re-scoring
+    expect(res.body.num_results).toBe(0); // still filtered out of the response
   });
 
-  it("KNOWN BUG: re-scores below-threshold articles on every request", async () => {
-    // Only articles that pass the threshold get cached, so rejected ones are
-    // re-sent to the model (and re-billed) forever. Phase 1 caches every
-    // scored article and applies the threshold at read time instead.
-    const openai = createFakeOpenAI(scoreByHeadline({}, "Score: 10"));
-    const app = createApp({ openaiClient: openai });
+  it("does not re-score an article it already holds", async () => {
+    const openai = createFakeOpenAI();
+    const app = buildApp(openai);
 
     mockNytSection("technology");
     await request(app).get("/api/articles/technology");
-    expect(openai.callCount).toBe(3);
-
     mockNytSection("technology");
-    await request(app).get("/api/articles/technology");
-    expect(openai.callCount).toBe(6); // all three scored a second time
+    const res = await request(app).get("/api/articles/technology");
+
+    expect(openai.scoringCount).toBe(3);
+    expect(res.body.num_results).toBe(3);
   });
 
   it("applies limit and offset before scoring", async () => {
     mockNytSection("technology");
-    const openai = createFakeOpenAI("Score: 90");
+    const openai = createFakeOpenAI();
 
-    const res = await request(createApp({ openaiClient: openai })).get(
+    const res = await request(buildApp(openai)).get(
       "/api/articles/technology?limit=1&offset=1"
     );
 
-    expect(openai.callCount).toBe(1);
+    expect(openai.scoringCount).toBe(1);
     expect(res.body.results.map((a) => a.url)).toEqual([CLOUD.url]);
   });
 
-  it("keeps serving other articles when one model call fails", async () => {
+  it("keeps serving other articles when one scoring call fails", async () => {
     mockNytSection("technology");
-    const openai = createFakeOpenAI((params) => {
-      if (params.messages[0].content.includes("Chip Maker")) {
-        throw new Error("rate limited");
-      }
-      return "Score: 90";
+    const openai = createFakeOpenAI({
+      scorer: (prompt) => {
+        if (prompt.includes("Chip Maker")) throw new Error("rate limited");
+        return { score: 90, rationale: "ok" };
+      },
     });
 
-    const res = await request(createApp({ openaiClient: openai })).get(
-      "/api/articles/technology"
-    );
+    const res = await request(buildApp(openai)).get("/api/articles/technology");
 
     expect(res.status).toBe(200);
     expect(res.body.num_results).toBe(2);
     expect(res.body.results.map((a) => a.url)).not.toContain(CHIP.url);
   });
 
+  it("drops an article when the model returns no tool call", async () => {
+    mockNytSection("technology");
+    const openai = createFakeOpenAI({
+      raw: () => ({ choices: [{ message: { content: "I'd say about 95." } }] }),
+    });
+
+    const res = await request(buildApp(openai)).get("/api/articles/technology");
+
+    expect(res.status).toBe(200);
+    expect(res.body.num_results).toBe(0);
+  });
+
+  it("rejects an out-of-range score instead of trusting it", async () => {
+    mockNytSection("technology");
+    const openai = createFakeOpenAI({ scorer: { score: 5000, rationale: "x" } });
+
+    const res = await request(buildApp(openai)).get("/api/articles/technology");
+
+    expect(res.body.num_results).toBe(0);
+  });
+
+  it("returns 400 for a section the NYT does not publish", async () => {
+    const openai = createFakeOpenAI();
+
+    const res = await request(buildApp(openai)).get("/api/articles/bananas");
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/Unknown section/);
+    expect(openai.callCount).toBe(0);
+  });
+
+  it("FIXED: resolves section names containing a slash", async () => {
+    // "books/review" is in the section list but a plain :section param never
+    // matched it, so the endpoint was unreachable for that section.
+    mockNytSection("books/review", fixture);
+    const openai = createFakeOpenAI();
+
+    const res = await request(buildApp(openai)).get("/api/articles/books/review");
+
+    expect(res.status).toBe(200);
+    expect(res.body.num_results).toBe(3);
+  });
+
   it("returns 500 when the NYT request fails", async () => {
     mockNytFailure("technology");
-    const openai = createFakeOpenAI("Score: 90");
+    const openai = createFakeOpenAI();
 
-    const res = await request(createApp({ openaiClient: openai })).get(
-      "/api/articles/technology"
-    );
+    const res = await request(buildApp(openai)).get("/api/articles/technology");
 
     expect(res.status).toBe(500);
     expect(res.body).toEqual({ error: "Failed to fetch articles" });

@@ -1,10 +1,10 @@
 import { describe, it, expect } from "vitest";
 import request from "supertest";
-import { createApp, NYT_SECTIONS } from "../app.js";
+import { createApp } from "../src/app.js";
+import { NYT_SECTIONS } from "../src/data/sections.js";
 import { createFakeOpenAI } from "./helpers/fakeOpenAI.js";
 
-const buildApp = () =>
-  createApp({ openaiClient: createFakeOpenAI("Score: 90") });
+const buildApp = () => createApp({ openaiClient: createFakeOpenAI() });
 
 describe("GET /api/sections", () => {
   it("returns the full hardcoded NYT section list", async () => {

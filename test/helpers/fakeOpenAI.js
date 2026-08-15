@@ -5,48 +5,100 @@
  * the SDK's internal request/retry machinery makes wire-level mocking brittle
  * across SDK upgrades, and the transport is not the thing under test.
  *
- * @param responder Either a fixed completion string, or a function
- *                  (params, callIndex) => string, so a test can vary the
- *                  reply per article (e.g. by reading the headline out of the
- *                  prompt).
+ * The app makes two different kinds of call, distinguished by whether tools
+ * are supplied:
+ *   - scoring   (tools + forced tool_choice) -> replies with a tool call
+ *   - analysis  (plain chat)                 -> replies with message content
+ *
+ * @param scorer   {score, rationale} or (promptText, params) => {score, rationale}
+ * @param analysis string or (params) => string
+ * @param raw      escape hatch: (params) => completion, overriding everything,
+ *                 for testing malformed model output
  */
-export const createFakeOpenAI = (responder) => {
+export const createFakeOpenAI = ({
+  scorer = { score: 90, rationale: "Directly market moving." },
+  analysis = "Here is the analysis.",
+  raw,
+} = {}) => {
   const calls = [];
+  const scoringCalls = [];
+  const analysisCalls = [];
+
+  const promptOf = (params) => params.messages[params.messages.length - 1].content;
 
   return {
     calls,
+    scoringCalls,
+    analysisCalls,
     get callCount() {
       return calls.length;
     },
-    /** Headlines seen so far, in call order (parsed out of the prompt text). */
-    get scoredTitles() {
-      return calls.map((params) => {
-        const content = params.messages[params.messages.length - 1].content;
-        return content.split("Here is the headline: ")[1] ?? content;
-      });
+    get scoringCount() {
+      return scoringCalls.length;
     },
+    /** Headline text seen by the scorer, in call order. */
+    get scoredPrompts() {
+      return scoringCalls.map(promptOf);
+    },
+
     chat: {
       completions: {
         create: async (params) => {
           calls.push(params);
-          const content =
-            typeof responder === "function"
-              ? responder(params, calls.length - 1)
-              : responder;
-          return { choices: [{ message: { content } }] };
+
+          if (raw) return raw(params);
+
+          if (params.tools) {
+            scoringCalls.push(params);
+            const result =
+              typeof scorer === "function" ? scorer(promptOf(params), params) : scorer;
+
+            return {
+              choices: [
+                {
+                  message: {
+                    tool_calls: [
+                      {
+                        id: `call_${scoringCalls.length}`,
+                        type: "function",
+                        function: {
+                          name: "report_relevance_score",
+                          arguments: JSON.stringify(result),
+                        },
+                      },
+                    ],
+                  },
+                },
+              ],
+            };
+          }
+
+          analysisCalls.push(params);
+          return {
+            choices: [
+              {
+                message: {
+                  content:
+                    typeof analysis === "function" ? analysis(params) : analysis,
+                },
+              },
+            ],
+          };
         },
       },
     },
   };
 };
 
-/** Builds a responder that maps a headline substring to a score. */
-export const scoreByHeadline = (scoresBySubstring, fallback = "Score: 0") => {
-  return (params) => {
-    const content = params.messages[params.messages.length - 1].content;
-    for (const [needle, reply] of Object.entries(scoresBySubstring)) {
-      if (content.includes(needle)) return reply;
+/**
+ * Build a scorer that maps a headline substring to a score.
+ * Anything unmatched gets `fallback`.
+ */
+export const scoreByHeadline = (scoresBySubstring, fallback = 0) => (prompt) => {
+  for (const [needle, score] of Object.entries(scoresBySubstring)) {
+    if (prompt.includes(needle)) {
+      return { score, rationale: `matched ${needle}` };
     }
-    return fallback;
-  };
+  }
+  return { score: fallback, rationale: "no match" };
 };
