@@ -2,6 +2,24 @@
 
 The intention here is to pull headlines from a news api and grade it based on the relevance to the stock market
 
+## Running Locally
+
+Requires a `.env` file with `NYT_API_KEY` and `OPENAI_API_KEY` set.
+
+```bash
+npm install
+npm start
+```
+
+This runs `nodemon server.js`, which listens on port 3000 (or `$PORT` if set) and restarts on file changes.
+
+In a separate terminal, test the endpoints:
+
+```bash
+curl http://localhost:3000/api/sections
+curl "http://localhost:3000/api/articles/technology?limit=3&offset=0"
+```
+
 ## It should do the following in order
 
 1. Scan and filter the NWT API
